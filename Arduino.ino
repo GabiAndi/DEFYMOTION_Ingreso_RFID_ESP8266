@@ -1,6 +1,8 @@
 /***************************************** Librerías *****************************************/
 #include <ESP8266WiFi.h>
-#include <WiFiClientSecure.h>
+#include <ESP8266HTTPClient.h>
+
+#include <WiFiClientSecureBearSSL.h>
 /*********************************************************************************************/
 
 /**************************************** Definiciones ***************************************/
@@ -8,36 +10,32 @@
 /*********************************************************************************************/
 
 /***************************************** Instancias ****************************************/
-// Conexión a la RED
-const char googleScriptUrl[] = "script.google.com";
-const uint32_t httpsPort = 443;
-const char googleScriptUrlContent[] = "script.googleusercontent.com";
-
 // Configuración de la RED
-const char ssid[] = "TPLINK_24G";
-const char password[] = "BasexB1Au1974*";
+const char SSID[] = "DEFYMOTION";
+const char PASSWORD[] = "laquequieras";
 
-IPAddress staticIP(192, 168, 1, 120);         // IP estática
-IPAddress gateway(192, 168, 1, 1);            // Dirección de gateway
-IPAddress subnet(255, 255, 255, 0);           // Mascara de red
-IPAddress primaryDNS(8, 8, 8, 8);             // Dirección DNS 1
-IPAddress secondaryDNS(8, 8, 4, 4);           // Dirección DNS 2
+const IPAddress staticIP(192, 168, 1, 100);         // IP estática
+const IPAddress gateway(192, 168, 1, 1);            // Dirección de gateway
+const IPAddress subnet(255, 255, 255, 0);           // Mascara de red
+const IPAddress primaryDNS(8, 8, 8, 8);             // Dirección DNS 1
+const IPAddress secondaryDNS(8, 8, 4, 4);           // Dirección DNS 2
 
 // Google
-WiFiClientSecure client;
-
 const String GOOGLE_SCRIPT_ID = "AKfycbwpNdDrvYaH2NDdEJJYZyEvE_QygqanishV76WQK6NBh8E7p84jxqP1xf8BcHtmW20N";
-const String UNIT_NAME = "headquarter";
+const String GOOGLE_SCRIPT_HOST = "https://script.google.com/macros/s/" + GOOGLE_SCRIPT_ID + "/exec";
 
-String nombre = "";
-String estado = "";
-String hora = "";
-String listado = "listado";
+const String UNIT_NAME = "defymotion_ingreso_rfid";
+
+// Estructura de datos para el request de https
+typedef struct https_request
+{
+  int requestCode;
+  String payload;
+}https_request_t;
 
 String data = ""; // Datos que se enviaran a Google
 
-void handleDataFromGoogle(String data); // Funcion de envio de datos
-String sendData(String params, char* domain); // Funcion que prepara el paquete de datos a Google
+void sendData(const String host, String &data, https_request_t *httpsRequest); // Funcion de datos
 /*********************************************************************************************/
 
 /************************************ Configuración inicial **********************************/
@@ -52,19 +50,18 @@ void setup()
   // Configuración de la conexión
   WiFi.mode(WIFI_STA);  // Modo estación
   WiFi.config(staticIP, gateway, subnet, primaryDNS, secondaryDNS); // Configuración de la conexión
-  WiFi.begin(ssid, password); // Se conecta a la RED
-
-  Serial.println("Conectando");
+  WiFi.begin(SSID, PASSWORD); // Se conecta a la RED
 
   // Se espera a que este realizada la conexión
   while (WiFi.status() != WL_CONNECTED)
   {
     Serial.print(".");
+
     delay(1000);  // Este delay SIEMPRE debe estar, de otra manera, se satura de consultas al ESP con WiFi.status()
   }
 
   Serial.println("");
-  Serial.println("WiFi conectado");
+  Serial.println("WiFi conectado con IP: " + WiFi.localIP().toString());
   
   delay(100); // Delay para en inicio
 }
@@ -76,130 +73,66 @@ void loop()
   // Test de conexión
   data = "";
   
-  for (uint8_t i = 0xA0 ; i < 4 ; i++)
+  for (uint8_t i = 0 ; i < 4 ; i++)
   {
-    data += String(i, HEX);
+    data += String(0x0A + i, HEX);
   }
-  
-  data = sendData("id=" + UNIT_NAME + "&uid=" + data, NULL); // Paquete de datos
 
-  Serial.println("Enviando: " + data);
+  data = "id=" + String(UNIT_NAME) + "&uid=" + data;
+
+  https_request_t httpsRequest;
   
-  //handleDataFromGoogle(data); // Envio de datos a Google
+  sendData(GOOGLE_SCRIPT_HOST, data, &httpsRequest); // Paquete de datos
+
+  Serial.println("---------------- Datos enviados ----------------");
+  Serial.println("HOST: " + GOOGLE_SCRIPT_HOST);
+  Serial.println("DATOS: " + data);
+  Serial.println("----------------- Request POST -----------------");
+  Serial.println("CODE: " + String(httpsRequest.requestCode));
+  Serial.println("PAYLOAD: " + httpsRequest.payload);
   
-  delay(60000); // Delay entre tomas
+  delay(30000); // Delay entre tomas
 }
 /*********************************************************************************************/
 
 /****************************************** Funciones ****************************************/
-void handleDataFromGoogle(String data)
+/*
+ * Función de envio de datos a un HOST
+ * 
+ * Esta función envia datos al dominio via POST y
+ * devuelve el request.
+ */
+void sendData(const String host, String &data, https_request_t *httpsRequest)
 {
-  int ind = data.indexOf(":");
-  String access = data.substring(0, ind);
-  estado = access;
-  int nextInd = data.indexOf(":", ind + 1);
-  String name = data.substring(ind + 1, nextInd);
-  nombre = name;
-  String fechayhora = data.substring(nextInd + 1, data.length());
-  int indFecha = fechayhora.indexOf(" ");
-  int ind2 = fechayhora.indexOf(";");
-  hora = fechayhora.substring(indFecha + 1, ind2);
-  listado = fechayhora.substring(ind2 + 1, fechayhora.length());
+  // Para el estado de retorno
+  httpsRequest->requestCode = HTTP_CODE_BAD_REQUEST;
+  httpsRequest->payload = "";
 
-  Serial.println("-->Ingresos<--");
-  
-  if (listado.length() > 1)
-  {
-    int posfin = listado.length() - 1;
-    int pos1 = 0;
-    int pos2 = 0;
-    String palabra = "";
-    
-    for (uint8_t i = 0; i < 6; i++)
-    {
-      pos1 = listado.indexOf("-", pos2);
-      palabra = listado.substring(pos2, pos1);
-      Serial.println(palabra);
-      pos2 = pos1 + 1;
-      
-      if (pos2 >= posfin)
-      {
-        break;
-      }
-    }
-  }
-}
+  // Conexión con cliente
+  WiFiClientSecure client;
+  HTTPClient https;
 
-String sendData(String params, char *domain)
-{
-  // Los scrips de Google requieren dos respuestas
-  bool needRedir = false;
-  
-  // Si el dominio ingresado es nulo
-  if (domain == NULL)
-  {
-    domain = (char *)(googleScriptUrl);
-    needRedir = true;
-    params = "/macros/s/" + GOOGLE_SCRIPT_ID + "/exec?" + params;
-  }
-
-  // Configuración del cliente
-  String result = "";
+  // Establecemos una conexión insegura, es decir no nos importa el certificado SSL
   client.setInsecure();
 
-  if (!client.connect(googleScriptUrl, httpsPort))
+  // Iniciamos la conexión con host
+  if (https.begin(client, host))
   {
-    return "";
+    Serial.println("Conexión con cliente establecida.");
+
+    // Se añade la cabecera con el tipo de dato para el POST
+    https.addHeader("Content-Type", "application/plain-text");
+
+    // Se manda el POST y se captura la respuesta
+    httpsRequest->requestCode = https.POST(data);
+    httpsRequest->payload = https.getString();
+
+    https.end();
   }
 
-  client.print(String("GET ") + params + " HTTP/1.1\r\n" +
-               "Host: " + domain + "\r\n" +
-               "Connection: close\r\n\r\n");
-
-  while (client.connected())
-  {
-    String line = client.readStringUntil('\n');
-
-    if (needRedir)
-    {
-      int ind = line.indexOf("/macros/echo?user");
-      
-      if (ind > 0)
-      {
-        line = line.substring(ind);
-        ind = line.lastIndexOf("\r");
-        line = line.substring(0, ind);
-        result = line;
-      }
-    }
-
-    if (line == "\r")
-    {
-      break;
-    }
-  }
-  
-  while (client.available())
-  {
-    String line = client.readStringUntil('\n');
-    
-    if (!needRedir)
-    {
-      if (line.length() > 5)
-      {
-        result = line;
-      }
-    }
-  }
-  
-  if (needRedir)
-  {
-    return sendData(result, (char *)(googleScriptUrlContent));
-  }
-  
   else
   {
-    return result;
+    Serial.println("No se pudo conectar al cliente.");
   }
 }
 /*********************************************************************************************/
