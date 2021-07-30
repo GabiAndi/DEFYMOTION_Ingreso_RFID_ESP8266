@@ -1,10 +1,38 @@
 /***************************************** Librerías *****************************************/
+// Librerias ESP8266
 #include <ESP8266WiFi.h>
 #include <HTTPSRedirect.h>
+#include <ESP8266HTTPClient.h>
+
+// Librerias para OTA
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <AsyncElegantOTA.h>
+
+// Librerias LCD
+#include <Adafruit_GFX.h>
+#include <Adafruit_PCD8544.h>
 /*********************************************************************************************/
 
 /**************************************** Definiciones ***************************************/
+// Definiciones para la deputacion para el puerto serie
+// 0 sin depuración
+// 1 con depuracion por puerto seria
+// 2 con depuración por LCD
+#define DEBUG_MODE            DEBUG_NONE  // Establece aqui el modo de depuración
 
+#define DEBUG_NONE            0
+#define DEBUG_SERIAL          1
+
+#if (DEBUG_MODE == DEBUG_NONE)
+#define DEBUG_PRINT(...)
+#define DEBUG_PRINTF(...)
+#define DEBUG_PRINTLN(...)
+#elif (DEBUG_MODE == DEBUG_SERIAL)
+#define DEBUG_PRINT(...)      Serial.print(__VA_ARGS__)
+#define DEBUG_PRINTF(...)     Serial.printf(__VA_ARGS__)
+#define DEBUG_PRINTLN(...)    Serial.println(__VA_ARGS__)
+#endif
 /*********************************************************************************************/
 
 /***************************************** Instancias ****************************************/
@@ -18,8 +46,15 @@ const IPAddress subnet(255, 255, 255, 0);           // Mascara de red
 const IPAddress primaryDNS(8, 8, 8, 8);             // Dirección DNS 1
 const IPAddress secondaryDNS(8, 8, 4, 4);           // Dirección DNS 2
 
+// Servidor web
+AsyncWebServer server(80);
+
+// Configuracion OTA
+const char *OTA_USERNAME = "DEFY";
+const char *OTA_PASSWORD = "DEFY0102";
+
 // Configuración de Google Scripts
-const String GOOGLE_SCRIPT_ID = "AKfycbx89NLbtMisXLw49XCYycQeYgD9huv3huf626IlFQQE_te0nKaBfLlIvp-vN_JineEm";
+const String GOOGLE_SCRIPT_ID = "AKfycbxd-sjre0PKJ-6WF29JRffbp6R3ZCauxzoNei-2Lnh-DdSndn6ZjlsJzTr6mKUH9TNhOg";
 const char *GOOGLE_SCRIPT_HOST = "script.google.com";
 const String GOOGLE_SCRIPT_URL = "/macros/s/" + GOOGLE_SCRIPT_ID + "/exec";
 const int GOOGLE_SCRIPT_PORT = 443;
@@ -36,6 +71,18 @@ String data = ""; // Datos que se enviaran a Google
 // Funcion de envio de datos via POST
 bool sendDataPOST(const char *host, const String &url, const int port,
                   const String &data, https_request_t *httpsRequest);
+
+// Funcion que analiza los datos recibidos via POST
+void readDataPOST(String payload);
+
+// LCD
+#if (DEBUG_MODE != DEBUG_SERIAL)
+// LCD Adafruit_PCD8544(sclk_pin, din_pin, dc_pin, cs_pin, rst_pin)
+Adafruit_PCD8544 display = Adafruit_PCD8544(D10, D9, D2, D1, D0);
+
+// Funcion de bienvenida
+void lcdWellcome();
+#endif
 /*********************************************************************************************/
 
 /************************************ Configuración inicial **********************************/
@@ -45,30 +92,68 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
 
   // Puerto serie
+#if (DEBUG_MODE == DEBUG_SERIAL)
   Serial.begin(9600);
+#endif
+
+#if (DEBUG_MODE != DEBUG_SERIAL)
+  // Display
+  display.begin();
+
+  display.setContrast(60);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+
+  lcdWellcome();
+#endif
 
   // Configuración de la conexión
   WiFi.mode(WIFI_STA);  // Modo estación
   WiFi.config(staticIP, gateway, subnet, primaryDNS, secondaryDNS); // Configuración de la conexión
   WiFi.begin(SSID, PASSWORD); // Se conecta a la RED
 
-  // Mensaje de inicio
-  delay(2000);
+  DEBUG_PRINTLN("Iniciando conexion");
+#if (DEBUG_MODE != DEBUG_SERIAL)
+  display.println("Iniciando conexion");
 
-  Serial.println("Iniciando conexión");
+  display.display();
+#endif
 
   // Se espera a que este realizada la conexión
-  while (WiFi.status() != WL_CONNECTED)
+  while (WiFi.waitForConnectResult() != WL_CONNECTED)
   {
-    Serial.print(".");
+    DEBUG_PRINT("Conexion fallida, reiniciando");
+#if (DEBUG_MODE != DEBUG_SERIAL)
+    display.println("Fallo, reiniciando");
 
-    delay(1000);  // Este delay SIEMPRE debe estar, de otra manera, se satura de consultas al ESP con WiFi.status()
+    display.display();
+#endif
+
+    delay(5000);
+
+    ESP.restart();
   }
 
-  Serial.println("");
-  Serial.println("WiFi conectado con IP: " + WiFi.localIP().toString());
-  
-  delay(1000); // Delay para en inicio
+  // Se habilita el OTA
+  AsyncElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
+  server.begin();
+
+  DEBUG_PRINTLN("WiFi conectado con IP: " + WiFi.localIP().toString());
+
+#if (DEBUG_MODE != DEBUG_SERIAL)
+  display.println("IP:");
+  display.println(WiFi.localIP().toString());
+
+  display.display();
+#endif
+
+  // Se espera un poco a la visualizacion
+  delay(5000);
+
+  display.clearDisplay();
+
+  display.display();
 }
 /*********************************************************************************************/
 
@@ -76,14 +161,7 @@ void setup()
 void loop()
 {
   // Datos a enviar
-  data = "";
-  
-  for (uint8_t i = 0 ; i < 4 ; i++)
-  {
-    data += String(0x0A + i, HEX);
-  }
-
-  data = "uid=" + data;
+  data = "uid=0000";
 
   // Respuesta recibida por el envio del paquete
   https_request_t httpsRequest;
@@ -91,27 +169,53 @@ void loop()
   // Se envia el paquete de datos y se retorna la respuesta
   if (sendDataPOST(GOOGLE_SCRIPT_HOST, GOOGLE_SCRIPT_URL, GOOGLE_SCRIPT_PORT, data, &httpsRequest))
   {
-    Serial.println("-------------- CONEXION CORRECTA ---------------");
+    DEBUG_PRINTLN("-------------- CONEXION CORRECTA ---------------");
+    DEBUG_PRINTLN("---------------- Datos enviados ----------------");
+    DEBUG_PRINTLN(String("HOST: ") + GOOGLE_SCRIPT_HOST + GOOGLE_SCRIPT_URL);
+    DEBUG_PRINTLN("DATOS: " + data);
+    DEBUG_PRINTLN("----------------- Request POST -----------------");
+    DEBUG_PRINTLN("CODE: " + String(httpsRequest.requestCode));
+    DEBUG_PRINTLN("PAYLOAD: " + httpsRequest.payload);
+
+    if (httpsRequest.requestCode == HTTP_CODE_OK)
+    {
+      readDataPOST(httpsRequest.payload);
+    }
   }
 
   else
   {
-    Serial.println("------------ CONEXION CON ERRORES --------------");
+    DEBUG_PRINTLN("------------ CONEXION CON ERRORES --------------");
   }
+  DEBUG_PRINTLN("------------------------------------------------");
 
-  Serial.println("---------------- Datos enviados ----------------");
-  Serial.println("HOST: " + String(GOOGLE_SCRIPT_HOST));
-  Serial.println("DATOS: " + data);
-  Serial.println("----------------- Request POST -----------------");
-  Serial.println("CODE: " + String(httpsRequest.requestCode));
-  Serial.println("PAYLOAD: " + httpsRequest.payload);
-  Serial.println("------------------------------------------------");
-  
-  delay(30000); // Delay entre tomas
+  delay(60000); // Delay entre tomas
 }
 /*********************************************************************************************/
 
 /****************************************** Funciones ****************************************/
+#if (DEBUG_MODE != DEBUG_SERIAL)
+/*
+ * Funcion de mensaje de inicio
+ */
+void lcdWellcome()
+{
+  display.setCursor(0, 0);
+
+  display.setTextSize(2);
+  display.println("  DEFY");
+  display.println(" MOTION");
+
+  display.display();
+
+  display.setTextSize(1);
+
+  delay(5000);
+
+  display.clearDisplay();
+}
+#endif
+
 /*
  * Función de envio de datos a un HOST
  * 
@@ -151,5 +255,40 @@ bool sendDataPOST(const char *host, const String &url, const int port, const Str
   }
 
   return returnCode;
+}
+
+/*
+ * Funcion encargada de analizar los datos recibidos por POST
+ */
+void readDataPOST(String payload)
+{
+  // Identificacion del UID (primer dato del payload)
+  int initIndex = payload.indexOf("=");
+  int endIndex = payload.indexOf("&");
+
+  String uid = payload.substring(initIndex + 1, endIndex);
+
+  payload.remove(0, endIndex + 1);
+
+  // Identificacion del nombre (segundo dato del payload)
+  initIndex = payload.indexOf("=");
+  endIndex = payload.indexOf("&");
+
+  String name = payload.substring(initIndex + 1, endIndex);
+
+  payload.remove(0, endIndex + 1);
+
+  // Identificacion del estado (tercer dato del payload)
+  initIndex = payload.indexOf("=");
+  endIndex = payload.indexOf("\r\n");
+
+  String state = payload.substring(initIndex + 1, endIndex);
+
+  payload.remove(0);
+  
+  DEBUG_PRINTLN("-------------- DATOS RESULTANTES ---------------");
+  DEBUG_PRINTLN("UID: " + uid);
+  DEBUG_PRINTLN("NOMBRE: " + name);
+  DEBUG_PRINTLN("ESTADO: " + state);
 }
 /*********************************************************************************************/
