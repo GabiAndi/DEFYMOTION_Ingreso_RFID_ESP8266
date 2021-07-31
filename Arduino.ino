@@ -133,7 +133,8 @@ void setup()
   {
     DEBUG_PRINT("Conexion fallida, reiniciando");
 #if (DEBUG_MODE != DEBUG_SERIAL)
-    display.println("Fallo, reiniciando");
+    display.println("Fallo,");
+    display.println("reiniciando");
 
     display.display();
 #endif
@@ -220,7 +221,7 @@ void loop()
     }
     DEBUG_PRINTLN("------------------------------------------------");
 
-    delay(5000);
+    delay(7000);
 
     systemState = SYSTEM_STATE_IDLE;
   }
@@ -336,9 +337,17 @@ void readDataPOST(String payload)
 
   // Identificacion del estado (tercer dato del payload)
   initIndex = payload.indexOf("=");
-  endIndex = payload.indexOf("\r\n");
+  endIndex = payload.indexOf("&");
 
   String state = payload.substring(initIndex + 1, endIndex);
+
+  payload.remove(0, endIndex + 1);
+
+  // Identificacion de la hora (cuarto dato del payload)
+  initIndex = payload.indexOf("=");
+  endIndex = payload.indexOf("\r\n");
+
+  String timeDate = payload.substring(initIndex + 1, endIndex);
 
   payload.remove(0);
   
@@ -346,6 +355,7 @@ void readDataPOST(String payload)
   DEBUG_PRINTLN("UID: " + uid);
   DEBUG_PRINTLN("NOMBRE: " + name);
   DEBUG_PRINTLN("ESTADO: " + state);
+  DEBUG_PRINTLN("HORA: " + timeDate);
 
 #if (DEBUG_MODE != DEBUG_SERIAL)
   display.clearDisplay();
@@ -354,6 +364,7 @@ void readDataPOST(String payload)
   display.println(uid);
   display.println(name);
   display.println(state);
+  display.println(timeDate);
 
   display.display();
 #endif
