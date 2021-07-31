@@ -12,6 +12,10 @@
 // Librerias LCD
 #include <Adafruit_GFX.h>
 #include <Adafruit_PCD8544.h>
+
+// Librerias para el RFID
+#include <SPI.h>
+#include <MFRC522.h>
 /*********************************************************************************************/
 
 /**************************************** Definiciones ***************************************/
@@ -37,6 +41,10 @@
 #define SYSTEM_STATE_IDLE           0
 #define SYSTEM_STATE_PROCESSING     1
 #define SYSTEM_STATE_READY          2
+
+// Pines del lector RF
+#define SS_PIN                      D4
+#define RST_PIN                     D3
 /*********************************************************************************************/
 
 /***************************************** Instancias ****************************************/
@@ -90,6 +98,11 @@ Adafruit_PCD8544 display = Adafruit_PCD8544(D10, D9, D2, D1, D0);
 // Funcion de bienvenida
 void lcdWellcome();
 #endif
+
+// RFID
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+byte uidCard[4];
 /*********************************************************************************************/
 
 /************************************ Configuración inicial **********************************/
@@ -157,6 +170,10 @@ void setup()
   display.display();
 #endif
 
+  // Lector RFID
+  SPI.begin();
+  mfrc522.PCD_Init();
+
   // Se espera un poco a la visualizacion
   delay(5000);
 
@@ -173,13 +190,27 @@ void loop()
   // Sistema en reposo esperando al pase de una tarjeta
   if (systemState == SYSTEM_STATE_READY)
   {
-    delay(30000);
+    // Si se detecto una nueva tarjeta
+    if (mfrc522.PICC_IsNewCardPresent())
+    {
+      // Seleccionamos una tarjeta
+      if (mfrc522.PICC_ReadCardSerial())
+      {
+        for (uint8_t i = 0 ; i < 4 ; i++)
+        {
+          uidCard[i] = mfrc522.uid.uidByte[i];
 
-    // Datos a enviar
-    data = "uid=93b8f22e";
+          data += String(uidCard[i], HEX);
+        }
 
-    // Se pasa a estado de procesamiento
-    systemState = SYSTEM_STATE_PROCESSING;
+        data = String("uid=" + data);
+        
+        mfrc522.PICC_HaltA();
+
+        // Se pasa a estado de procesamiento
+        systemState = SYSTEM_STATE_PROCESSING;
+      }
+    }
   }
 
   // Sistema procesando el pase de una tarjeta
