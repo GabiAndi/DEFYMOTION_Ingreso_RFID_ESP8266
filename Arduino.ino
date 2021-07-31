@@ -18,21 +18,25 @@
 // Definiciones para la deputacion para el puerto serie
 // 0 sin depuración
 // 1 con depuracion por puerto seria
-// 2 con depuración por LCD
-#define DEBUG_MODE            DEBUG_NONE  // Establece aqui el modo de depuración
+#define DEBUG_MODE                  DEBUG_NONE  // Establece aqui el modo de depuración
 
-#define DEBUG_NONE            0
-#define DEBUG_SERIAL          1
+#define DEBUG_NONE                  0
+#define DEBUG_SERIAL                1
 
 #if (DEBUG_MODE == DEBUG_NONE)
 #define DEBUG_PRINT(...)
 #define DEBUG_PRINTF(...)
 #define DEBUG_PRINTLN(...)
 #elif (DEBUG_MODE == DEBUG_SERIAL)
-#define DEBUG_PRINT(...)      Serial.print(__VA_ARGS__)
-#define DEBUG_PRINTF(...)     Serial.printf(__VA_ARGS__)
-#define DEBUG_PRINTLN(...)    Serial.println(__VA_ARGS__)
+#define DEBUG_PRINT(...)            Serial.print(__VA_ARGS__)
+#define DEBUG_PRINTF(...)           Serial.printf(__VA_ARGS__)
+#define DEBUG_PRINTLN(...)          Serial.println(__VA_ARGS__)
 #endif
+
+// Estados del sistema
+#define SYSTEM_STATE_IDLE           0
+#define SYSTEM_STATE_PROCESSING     1
+#define SYSTEM_STATE_READY          2
 /*********************************************************************************************/
 
 /***************************************** Instancias ****************************************/
@@ -67,6 +71,9 @@ typedef struct https_request
 }https_request_t;
 
 String data = ""; // Datos que se enviaran a Google
+
+// Estado del sistema
+uint8_t systemState = SYSTEM_STATE_IDLE;
 
 // Funcion de envio de datos via POST
 bool sendDataPOST(const char *host, const String &url, const int port,
@@ -115,7 +122,8 @@ void setup()
 
   DEBUG_PRINTLN("Iniciando conexion");
 #if (DEBUG_MODE != DEBUG_SERIAL)
-  display.println("Iniciando conexion");
+  display.println("Iniciando");
+  display.println("conexion");
 
   display.display();
 #endif
@@ -151,45 +159,84 @@ void setup()
   // Se espera un poco a la visualizacion
   delay(5000);
 
+#if (DEBUG_MODE != DEBUG_SERIAL)
   display.clearDisplay();
-
   display.display();
+#endif
 }
 /*********************************************************************************************/
 
 /*************************************** Bucle principal *************************************/
 void loop()
 {
-  // Datos a enviar
-  data = "uid=0000";
-
-  // Respuesta recibida por el envio del paquete
-  https_request_t httpsRequest;
-  
-  // Se envia el paquete de datos y se retorna la respuesta
-  if (sendDataPOST(GOOGLE_SCRIPT_HOST, GOOGLE_SCRIPT_URL, GOOGLE_SCRIPT_PORT, data, &httpsRequest))
+  // Sistema en reposo esperando al pase de una tarjeta
+  if (systemState == SYSTEM_STATE_READY)
   {
-    DEBUG_PRINTLN("-------------- CONEXION CORRECTA ---------------");
-    DEBUG_PRINTLN("---------------- Datos enviados ----------------");
-    DEBUG_PRINTLN(String("HOST: ") + GOOGLE_SCRIPT_HOST + GOOGLE_SCRIPT_URL);
-    DEBUG_PRINTLN("DATOS: " + data);
-    DEBUG_PRINTLN("----------------- Request POST -----------------");
-    DEBUG_PRINTLN("CODE: " + String(httpsRequest.requestCode));
-    DEBUG_PRINTLN("PAYLOAD: " + httpsRequest.payload);
+    delay(30000);
 
-    if (httpsRequest.requestCode == HTTP_CODE_OK)
+    // Datos a enviar
+    data = "uid=93b8f22e";
+
+    // Se pasa a estado de procesamiento
+    systemState = SYSTEM_STATE_PROCESSING;
+  }
+
+  // Sistema procesando el pase de una tarjeta
+  else if (systemState == SYSTEM_STATE_PROCESSING)
+  {
+    // Respuesta recibida por el envio del paquete
+    https_request_t httpsRequest;
+    
+    // Se envia el paquete de datos y se retorna la respuesta
+    if (sendDataPOST(GOOGLE_SCRIPT_HOST, GOOGLE_SCRIPT_URL, GOOGLE_SCRIPT_PORT, data, &httpsRequest))
     {
-      readDataPOST(httpsRequest.payload);
+      DEBUG_PRINTLN("-------------- CONEXION CORRECTA ---------------");
+      DEBUG_PRINTLN("---------------- Datos enviados ----------------");
+      DEBUG_PRINTLN(String("HOST: ") + GOOGLE_SCRIPT_HOST + GOOGLE_SCRIPT_URL);
+      DEBUG_PRINTLN("DATOS: " + data);
+      DEBUG_PRINTLN("----------------- Request POST -----------------");
+      DEBUG_PRINTLN("CODE: " + String(httpsRequest.requestCode));
+      DEBUG_PRINTLN("PAYLOAD: " + httpsRequest.payload);
+
+      if (httpsRequest.requestCode == HTTP_CODE_OK)
+      {
+        readDataPOST(httpsRequest.payload);
+      }
     }
+
+    else
+    {
+      DEBUG_PRINTLN("------------ CONEXION CON ERRORES --------------");
+
+#if (DEBUG_MODE != DEBUG_SERIAL)
+      display.clearDisplay();
+      display.println("NUEVO INGRESO");
+      display.println("REGISTRO FAIL:");
+      display.println("Error de");
+      display.println("conexion");
+
+      display.display();
+#endif
+    }
+    DEBUG_PRINTLN("------------------------------------------------");
+
+    delay(5000);
+
+    systemState = SYSTEM_STATE_IDLE;
   }
 
-  else
+  // Se imprime que el sistema estará en espera
+  else if (systemState == SYSTEM_STATE_IDLE)
   {
-    DEBUG_PRINTLN("------------ CONEXION CON ERRORES --------------");
-  }
-  DEBUG_PRINTLN("------------------------------------------------");
+#if (DEBUG_MODE != DEBUG_SERIAL)
+    display.clearDisplay();
+    display.println("Pase tarjeta");
 
-  delay(60000); // Delay entre tomas
+    display.display();
+#endif
+
+    systemState = SYSTEM_STATE_READY;
+  }
 }
 /*********************************************************************************************/
 
@@ -224,6 +271,15 @@ void lcdWellcome()
  */
 bool sendDataPOST(const char *host, const String &url, const int port, const String &data, https_request_t *httpsRequest)
 {
+  // Mensaje de proceso
+#if (DEBUG_MODE != DEBUG_SERIAL)
+  display.clearDisplay();
+  display.println("NUEVO INGRESO");
+  display.println("REGISTRANDO");
+
+  display.display();
+#endif
+
   // Respuesta de conexión
   bool returnCode = false;
 
@@ -290,5 +346,16 @@ void readDataPOST(String payload)
   DEBUG_PRINTLN("UID: " + uid);
   DEBUG_PRINTLN("NOMBRE: " + name);
   DEBUG_PRINTLN("ESTADO: " + state);
+
+#if (DEBUG_MODE != DEBUG_SERIAL)
+  display.clearDisplay();
+  display.println("NUEVO INGRESO");
+  display.println("REGISTRO OK:");
+  display.println(uid);
+  display.println(name);
+  display.println(state);
+
+  display.display();
+#endif
 }
 /*********************************************************************************************/
