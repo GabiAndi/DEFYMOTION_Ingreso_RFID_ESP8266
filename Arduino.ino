@@ -52,8 +52,8 @@
 const char SSID[] = "DEFYMOTION";
 const char PASSWORD[] = "laquequieras";
 
-const IPAddress staticIP(192, 168, 0, 100);         // IP estática
-const IPAddress gateway(192, 168, 0, 1);            // Dirección de gateway
+const IPAddress staticIP(192, 168, 1, 100);         // IP estática
+const IPAddress gateway(192, 168, 1, 1);            // Dirección de gateway
 const IPAddress subnet(255, 255, 255, 0);           // Mascara de red
 const IPAddress primaryDNS(8, 8, 8, 8);             // Dirección DNS 1
 const IPAddress secondaryDNS(8, 8, 4, 4);           // Dirección DNS 2
@@ -66,7 +66,7 @@ const char *OTA_USERNAME = "DEFY";
 const char *OTA_PASSWORD = "DEFY0102";
 
 // Configuración de Google Scripts
-const String GOOGLE_SCRIPT_ID = "AKfycbxd-sjre0PKJ-6WF29JRffbp6R3ZCauxzoNei-2Lnh-DdSndn6ZjlsJzTr6mKUH9TNhOg";
+const String GOOGLE_SCRIPT_ID = "AKfycbxre4Zetg29e0i2PdZ-ID4j9tw6CczbxfNzoiA3Xke4rHvpLLNbDPRvF8gAbUTcs1GCpw";
 const char *GOOGLE_SCRIPT_HOST = "script.google.com";
 const String GOOGLE_SCRIPT_URL = "/macros/s/" + GOOGLE_SCRIPT_ID + "/exec";
 const int GOOGLE_SCRIPT_PORT = 443;
@@ -79,6 +79,14 @@ typedef struct https_request
 }https_request_t;
 
 String data = ""; // Datos que se enviaran a Google
+
+// Estructura de datos del sistema
+typedef struct system
+{
+  String *ingresos;
+}system_t;
+
+
 
 // Estado del sistema
 uint8_t systemState = SYSTEM_STATE_IDLE;
@@ -196,6 +204,8 @@ void loop()
       // Seleccionamos una tarjeta
       if (mfrc522.PICC_ReadCardSerial())
       {
+        data = "";
+
         for (uint8_t i = 0 ; i < 4 ; i++)
         {
           uidCard[i] = mfrc522.uid.uidByte[i];
@@ -262,7 +272,9 @@ void loop()
   {
 #if (DEBUG_MODE != DEBUG_SERIAL)
     display.clearDisplay();
-    display.println("Pase tarjeta");
+    display.println("INGRESOS");
+    
+    
 
     display.display();
 #endif
