@@ -49,8 +49,8 @@
 
 /***************************************** Instancias ****************************************/
 // Configuración de la RED
-const char SSID[] = "TPLINK_24G";
-const char PASSWORD[] = "BasexB1Au1974*";
+const char SSID[] = "DEFYMOTION";
+const char PASSWORD[] = "laquequieras";
 
 const IPAddress staticIP(192, 168, 0, 100);         // IP estática
 const IPAddress gateway(192, 168, 0, 1);            // Dirección de gateway
