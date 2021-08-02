@@ -21,7 +21,7 @@
 /**************************************** Definiciones ***************************************/
 // Definiciones para la deputacion para el puerto serie
 // 0 sin depuración
-// 1 con depuracion por puerto seria
+// 1 con depuracion por puerto serie
 #define DEBUG_MODE                  DEBUG_NONE  // Establece aqui el modo de depuración
 
 #define DEBUG_NONE                  0
@@ -45,6 +45,9 @@
 // Pines del lector RF
 #define SS_PIN                      D4
 #define RST_PIN                     D3
+
+// Numero maximo de usuarios
+#define MAX_USERS                   20
 /*********************************************************************************************/
 
 /***************************************** Instancias ****************************************/
@@ -80,23 +83,35 @@ typedef struct https_request
 
 String data = ""; // Datos que se enviaran a Google
 
+// Estructura de usuarios
+typedef struct system_user
+{
+  String name;
+  String uid;
+  String state;
+}system_user_t;
+
 // Estructura de datos del sistema
 typedef struct system
 {
-  String *ingresos;
+  uint8_t systemState;
+  system_user_t *usersEntry[MAX_USERS];
 }system_t;
 
-
-
-// Estado del sistema
-uint8_t systemState = SYSTEM_STATE_IDLE;
+system_t systemManager;
 
 // Funcion de envio de datos via POST
 bool sendDataPOST(const char *host, const String &url, const int port,
                   const String &data, https_request_t *httpsRequest);
 
 // Funcion que analiza los datos recibidos via POST
-void readDataPOST(String payload);
+void readDataPOST(String &payload);
+
+// Funcion que añade un usario a los ingresados
+void addUserToUsersEntry(system_user *user);
+
+// Funcion que remueve un usario de los ingresados
+void removeUserToUsersEntryUID(String &uid);
 
 // LCD
 #if (DEBUG_MODE != DEBUG_SERIAL)
@@ -118,6 +133,14 @@ void setup()
 {
   // Pines GPIO
   pinMode(LED_BUILTIN, OUTPUT);
+
+  // Inicio del system manager
+  systemManager.systemState = SYSTEM_STATE_IDLE;
+
+  for (uint i = 0 ; i < MAX_USERS ; i++)
+  {
+    systemManager.usersEntry[i] = nullptr;
+  }
 
   // Puerto serie
 #if (DEBUG_MODE == DEBUG_SERIAL)
@@ -196,7 +219,7 @@ void setup()
 void loop()
 {
   // Sistema en reposo esperando al pase de una tarjeta
-  if (systemState == SYSTEM_STATE_READY)
+  if (systemManager.systemState == SYSTEM_STATE_READY)
   {
     // Si se detecto una nueva tarjeta
     if (mfrc522.PICC_IsNewCardPresent())
@@ -218,13 +241,13 @@ void loop()
         mfrc522.PICC_HaltA();
 
         // Se pasa a estado de procesamiento
-        systemState = SYSTEM_STATE_PROCESSING;
+        systemManager.systemState = SYSTEM_STATE_PROCESSING;
       }
     }
   }
 
   // Sistema procesando el pase de una tarjeta
-  else if (systemState == SYSTEM_STATE_PROCESSING)
+  else if (systemManager.systemState == SYSTEM_STATE_PROCESSING)
   {
     // Respuesta recibida por el envio del paquete
     https_request_t httpsRequest;
@@ -264,22 +287,38 @@ void loop()
 
     delay(7000);
 
-    systemState = SYSTEM_STATE_IDLE;
+    systemManager.systemState = SYSTEM_STATE_IDLE;
   }
 
   // Se imprime que el sistema estará en espera
-  else if (systemState == SYSTEM_STATE_IDLE)
+  else if (systemManager.systemState == SYSTEM_STATE_IDLE)
   {
 #if (DEBUG_MODE != DEBUG_SERIAL)
     display.clearDisplay();
     display.println("INGRESOS");
     
-    
+    // Se imprimen los usuario ingresados
+    uint8_t printLCDIndex = 0;
+
+    for (uint i = 0 ; i < 10 ; i++)
+    {
+      if (printLCDIndex == 5)
+      {
+        display.setCursor(display.width() / 2, 8);
+      }
+
+      if (systemManager.usersEntry[i] != nullptr)
+      {
+        display.println(systemManager.usersEntry[i]->name);
+
+        printLCDIndex++;
+      }
+    }
 
     display.display();
 #endif
 
-    systemState = SYSTEM_STATE_READY;
+    systemManager.systemState = SYSTEM_STATE_READY;
   }
 }
 /*********************************************************************************************/
@@ -360,7 +399,7 @@ bool sendDataPOST(const char *host, const String &url, const int port, const Str
 /*
  * Funcion encargada de analizar los datos recibidos por POST
  */
-void readDataPOST(String payload)
+void readDataPOST(String &payload)
 {
   // Identificacion del UID (primer dato del payload)
   int initIndex = payload.indexOf("=");
@@ -400,6 +439,18 @@ void readDataPOST(String payload)
   DEBUG_PRINTLN("ESTADO: " + state);
   DEBUG_PRINTLN("HORA: " + timeDate);
 
+  // Si el usuario entra se lo añade
+  if (state == "ENTRADA")
+  {
+    addUserToUsersEntry(new system_user_t{name, uid, state});
+  }
+
+  // Si el usuario sale se lo quita
+  else if (state == "SALIDA")
+  {
+    removeUserToUsersEntryUID(uid);
+  }
+
 #if (DEBUG_MODE != DEBUG_SERIAL)
   display.clearDisplay();
   display.println("NUEVO INGRESO");
@@ -411,5 +462,55 @@ void readDataPOST(String payload)
 
   display.display();
 #endif
+}
+
+/*
+ * Funcion que añade usuarios a la lista de ingresados
+ */
+void addUserToUsersEntry(system_user *user)
+{
+  // Bandera de lugar disponible
+  bool freeSpace = false;
+
+  // Donde se encuentre un espacio se asigna
+  for (uint i = 0 ; i < MAX_USERS ; i++)
+  {
+    if (systemManager.usersEntry[i] == nullptr)
+    {
+      systemManager.usersEntry[i] = user;
+
+      freeSpace = true;
+
+      break;
+    }
+  }
+
+  // Si no hay lugar disponible se elimina la memoria creada
+  if (!freeSpace)
+  {
+    delete user;
+  }
+}
+
+/*
+ * Funcion que remueve usuarios de la lista de ingresados
+ */
+void removeUserToUsersEntryUID(String &uid)
+{
+  // Donde se encuentre el usuario se elimina
+  for (uint i = 0 ; i < MAX_USERS ; i++)
+  {
+    if (systemManager.usersEntry[i] != nullptr)
+    {
+      if (systemManager.usersEntry[i]->uid == uid)
+      {
+        delete systemManager.usersEntry[i];
+
+        systemManager.usersEntry[i] = nullptr;
+
+        break;
+      }
+    }
+  }
 }
 /*********************************************************************************************/
