@@ -205,6 +205,11 @@ void setup()
   SPI.begin();
   mfrc522.PCD_Init();
 
+  // Se inicia la pagina local
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Pagina principal");
+  });
+
   // Se espera un poco a la visualizacion
   delay(5000);
 
@@ -266,6 +271,18 @@ void loop()
       if (httpsRequest.requestCode == HTTP_CODE_OK)
       {
         readDataPOST(httpsRequest.payload);
+      }
+
+      else
+      {
+        display.clearDisplay();
+        display.println("NUEVO INGRESO");
+        display.println("REGISTRO FAIL:");
+        display.println("Error " + String(httpsRequest.requestCode));
+
+        display.display();
+
+        delay(5000);
       }
     }
 
@@ -385,7 +402,10 @@ bool sendDataPOST(const char *host, const String &url, const int port, const Str
     httpsRequest->requestCode = client.getStatusCode();
     httpsRequest->payload = client.getResponseBody();
 
-    returnCode = true;
+    if (httpsRequest->requestCode > 0)
+    {
+      returnCode = true;
+    }
   }
 
   else
