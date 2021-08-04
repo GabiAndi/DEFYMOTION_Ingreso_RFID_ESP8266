@@ -24,6 +24,12 @@
 // 1 con depuracion por puerto serie
 #define DEBUG_MODE                  DEBUG_NONE  // Establece aqui el modo de depuración
 
+// Definiciones para el estado
+// 0 sin pagina de log
+// 1 con pagina de log
+#define LOG_MODE                    LOG_ON      // Establece una pagina donde ver el registro de estado
+
+// Depuracion
 #define DEBUG_NONE                  0
 #define DEBUG_SERIAL                1
 
@@ -35,6 +41,20 @@
 #define DEBUG_PRINT(...)            Serial.print(__VA_ARGS__)
 #define DEBUG_PRINTF(...)           Serial.printf(__VA_ARGS__)
 #define DEBUG_PRINTLN(...)          Serial.println(__VA_ARGS__)
+#endif
+
+// Log
+#define LOG_OFF                     0
+#define LOG_ON                      1
+
+#if (LOG_MODE == LOG_ON)
+#define SERVER_LOG_ROOT             "/log"
+
+#define LOG_MAX_SIZE                2000  // Tamaño maximo de logueo en caracteres
+
+#define ADD_LOG(...)                logAdd(__VA_ARGS__)
+#else
+#define ADD_LOG(...)
 #endif
 
 // Estados del sistema
@@ -63,6 +83,11 @@ const IPAddress secondaryDNS(8, 8, 4, 4);           // Dirección DNS 2
 
 // Servidor web
 AsyncWebServer server(80);
+
+// Log
+#if (LOG_MODE == LOG_ON)
+String logData = "";
+#endif
 
 // Configuracion OTA
 const char *OTA_USERNAME = "DEFY";
@@ -113,6 +138,14 @@ void addUserToUsersEntry(system_user *user);
 // Funcion que remueve un usario de los ingresados
 void removeUserToUsersEntryUID(String &uid);
 
+#if (LOG_MODE == LOG_ON)
+// Funcion que se llama a un GET a la pagina de log
+void logPage(AsyncWebServerRequest *request);
+
+// Funcion que añade lineas al LOG
+void logAdd(const String &log);
+#endif
+
 // LCD
 #if (DEBUG_MODE != DEBUG_SERIAL)
 // LCD Adafruit_PCD8544(sclk_pin, din_pin, dc_pin, cs_pin, rst_pin)
@@ -145,6 +178,11 @@ void setup()
   // Puerto serie
 #if (DEBUG_MODE == DEBUG_SERIAL)
   Serial.begin(9600);
+
+  ADD_LOG("Depuración por puerto serie iniciada");
+
+#elif (DEBUG_MODE == DEBUG_SERIAL)
+  ADD_LOG("Depuración por puerto serie desactivada");
 #endif
 
 #if (DEBUG_MODE != DEBUG_SERIAL)
@@ -188,10 +226,6 @@ void setup()
     ESP.restart();
   }
 
-  // Se habilita el OTA
-  AsyncElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
-  server.begin();
-
   DEBUG_PRINTLN("WiFi conectado con IP: " + WiFi.localIP().toString());
 
 #if (DEBUG_MODE != DEBUG_SERIAL)
@@ -201,17 +235,21 @@ void setup()
   display.display();
 #endif
 
+  // Se espera un poco a la visualizacion
+  delay(5000);
+
+  // Se habilita el OTA
+  AsyncElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
+  server.begin();
+
   // Lector RFID
   SPI.begin();
   mfrc522.PCD_Init();
 
+#if (LOG_MODE == LOG_ON)
   // Se inicia la pagina local
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/plain", "Pagina principal");
-  });
-
-  // Se espera un poco a la visualizacion
-  delay(5000);
+  server.on(SERVER_LOG_ROOT, HTTP_GET, logPage);
+#endif
 
 #if (DEBUG_MODE != DEBUG_SERIAL)
   display.clearDisplay();
@@ -282,6 +320,8 @@ void loop()
 
         display.display();
 
+        ADD_LOG("Ingreso con error de respuesta, codigo: " + String(httpsRequest.requestCode));
+
         delay(5000);
       }
     }
@@ -298,6 +338,8 @@ void loop()
       display.println("conexion");
 
       display.display();
+
+      ADD_LOG("Error al conectar con el servidor.");
 #endif
     }
     DEBUG_PRINTLN("------------------------------------------------");
@@ -533,4 +575,28 @@ void removeUserToUsersEntryUID(String &uid)
     }
   }
 }
+
+#if (LOG_MODE == LOG_ON)
+/*
+ * Funcion que lista la pagina de log
+ */
+void logPage(AsyncWebServerRequest *request)
+{
+  request->send(200, "text/plain", "ESTADO DEL SISTEMA\r\n\r\n" + logData);
+}
+
+/*
+ * Funcion que añade lineas al log
+ */
+void logAdd(const String &log)
+{
+  // Si con el nuevo mensaje se excede del tamaño maximo se elimina una linea
+  if (logData.length() > LOG_MAX_SIZE)
+  {
+    logData.remove(0, logData.indexOf('\n') + 1);
+  }
+
+  logData += log + "\r\n";
+}
+#endif
 /*********************************************************************************************/
