@@ -16,6 +16,9 @@
 // Librerias para el RFID
 #include <SPI.h>
 #include <MFRC522.h>
+
+// Librerias para el uso de la EEPROM
+#include <EEPROM_Rotate.h>
 /*********************************************************************************************/
 
 /**************************************** Definiciones ***************************************/
@@ -24,6 +27,12 @@
 // 1 con depuracion por puerto serie
 #define DEBUG_MODE                  DEBUG_NONE  // Establece aqui el modo de depuración
 
+// Definiciones para el estado
+// 0 sin pagina de log
+// 1 con pagina de log
+#define LOG_MODE                    LOG_ON      // Establece una pagina donde ver el registro de estado
+
+// Depuracion
 #define DEBUG_NONE                  0
 #define DEBUG_SERIAL                1
 
@@ -37,6 +46,20 @@
 #define DEBUG_PRINTLN(...)          Serial.println(__VA_ARGS__)
 #endif
 
+// Log
+#define LOG_OFF                     0
+#define LOG_ON                      1
+
+#if (LOG_MODE == LOG_ON)
+#define SERVER_LOG_ROOT             "/log"
+
+#define LOG_MAX_SIZE                4000  // Tamaño maximo de logueo en caracteres
+
+#define ADD_LOG(...)                logAdd(__VA_ARGS__)
+#else
+#define ADD_LOG(...)
+#endif
+
 // Estados del sistema
 #define SYSTEM_STATE_IDLE           0
 #define SYSTEM_STATE_PROCESSING     1
@@ -48,6 +71,12 @@
 
 // Numero maximo de usuarios
 #define MAX_USERS                   20
+
+// Configuracion de la EEPROM
+#define EEPROM_ROTATE_SIZE          1  // Uso de sectores para la rotacion
+#define EEPROM_SIZE                 1  // Uso de sectores para el almacen de datos
+#define EEPROM_BYTES_USER           4096 * EEPROM_SIZE  // Calculo de bytes utilizados
+#define EEPROM_BYTES_OFFSET         10  // Offset de memoria
 /*********************************************************************************************/
 
 /***************************************** Instancias ****************************************/
@@ -64,12 +93,17 @@ const IPAddress secondaryDNS(8, 8, 4, 4);           // Dirección DNS 2
 // Servidor web
 AsyncWebServer server(80);
 
+// Log
+#if (LOG_MODE == LOG_ON)
+String logData = "";
+#endif
+
 // Configuracion OTA
 const char *OTA_USERNAME = "DEFY";
 const char *OTA_PASSWORD = "DEFY0102";
 
 // Configuración de Google Scripts
-const String GOOGLE_SCRIPT_ID = "AKfycbxre4Zetg29e0i2PdZ-ID4j9tw6CczbxfNzoiA3Xke4rHvpLLNbDPRvF8gAbUTcs1GCpw";
+const String GOOGLE_SCRIPT_ID = "AKfycbxjFBzYRrkmfBKN0qrxdFEXy2pbh7e3c8A7l1Zhd0O20cZPfdW3Hfvdd9tI_6KwmZ6ZeA";
 const char *GOOGLE_SCRIPT_HOST = "script.google.com";
 const String GOOGLE_SCRIPT_URL = "/macros/s/" + GOOGLE_SCRIPT_ID + "/exec";
 const int GOOGLE_SCRIPT_PORT = 443;
@@ -91,14 +125,23 @@ typedef struct system_user
   String state;
 }system_user_t;
 
+// EEPROM
+EEPROM_Rotate eeprom;
+
+// Estructura de datos que se va a guardar en la EEPROM
+typedef struct system_eeprom
+{
+  system_user_t users_entry[MAX_USERS];
+}system_eeprom_t;
+
 // Estructura de datos del sistema
 typedef struct system
 {
-  uint8_t systemState;
-  system_user_t *usersEntry[MAX_USERS];
+  uint8_t system_state;
+  system_eeprom_t system_eeprom_data;
 }system_t;
 
-system_t systemManager;
+system_t system_manager;
 
 // Funcion de envio de datos via POST
 bool sendDataPOST(const char *host, const String &url, const int port,
@@ -108,10 +151,27 @@ bool sendDataPOST(const char *host, const String &url, const int port,
 void readDataPOST(String &payload);
 
 // Funcion que añade un usario a los ingresados
-void addUserToUsersEntry(system_user *user);
+void addUserToUsersEntry(system_user &user);
 
 // Funcion que remueve un usario de los ingresados
-void removeUserToUsersEntryUID(String &uid);
+void removeUserToUsersEntry(String &uid);
+
+#if (LOG_MODE == LOG_ON)
+// Funcion que se llama a un GET a la pagina de log
+void logPage(AsyncWebServerRequest *request);
+
+// Funcion que añade lineas al LOG
+void logAdd(const String &log);
+#endif
+
+// Salva los datos en la eeprom
+void eepromSave();
+
+// Lee los datos de la eeprom
+void eepromRestore();
+
+// Escribe con datos vacios la eeprom
+void eepromReset();
 
 // LCD
 #if (DEBUG_MODE != DEBUG_SERIAL)
@@ -135,16 +195,31 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
 
   // Inicio del system manager
-  systemManager.systemState = SYSTEM_STATE_IDLE;
+  system_manager.system_state = SYSTEM_STATE_IDLE;
 
-  for (uint i = 0 ; i < MAX_USERS ; i++)
-  {
-    systemManager.usersEntry[i] = nullptr;
-  }
+  // Inicio de la EEPROM
+  system_manager.system_eeprom_data = {"", "", ""};
+
+  eeprom.size(EEPROM_ROTATE_SIZE);  // Sectores para la rotacion de memoria
+  eeprom.begin(4096); // Uso el sector completo
+
+  // Leemos la EEPROM
+  ADD_LOG("Restaurando datos de la EEPROM");
+
+  //eepromReset();  // Restauro la flash
+
+  eepromRestore();  // Leo los datos almacenados
+
+  ADD_LOG("Restaurados los datos de la EEPROM");
 
   // Puerto serie
 #if (DEBUG_MODE == DEBUG_SERIAL)
   Serial.begin(9600);
+
+  ADD_LOG("Depuración por puerto serie iniciada");
+
+#elif (DEBUG_MODE == DEBUG_SERIAL)
+  ADD_LOG("Depuración por puerto serie desactivada");
 #endif
 
 #if (DEBUG_MODE != DEBUG_SERIAL)
@@ -173,24 +248,21 @@ void setup()
 #endif
 
   // Se espera a que este realizada la conexión
-  while (WiFi.waitForConnectResult() != WL_CONNECTED)
+  if (WiFi.waitForConnectResult() != WL_CONNECTED)
   {
     DEBUG_PRINT("Conexion fallida, reiniciando");
+
 #if (DEBUG_MODE != DEBUG_SERIAL)
     display.println("Fallo,");
     display.println("reiniciando");
 
     display.display();
-#endif
 
     delay(5000);
+#endif
 
     ESP.restart();
   }
-
-  // Se habilita el OTA
-  AsyncElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
-  server.begin();
 
   DEBUG_PRINTLN("WiFi conectado con IP: " + WiFi.localIP().toString());
 
@@ -201,12 +273,21 @@ void setup()
   display.display();
 #endif
 
+  // Se espera un poco a la visualizacion
+  delay(5000);
+
+  // Se habilita el OTA
+  AsyncElegantOTA.begin(&server, OTA_USERNAME, OTA_PASSWORD);
+  server.begin();
+
   // Lector RFID
   SPI.begin();
   mfrc522.PCD_Init();
 
-  // Se espera un poco a la visualizacion
-  delay(5000);
+#if (LOG_MODE == LOG_ON)
+  // Se inicia la pagina local
+  server.on(SERVER_LOG_ROOT, HTTP_GET, logPage);
+#endif
 
 #if (DEBUG_MODE != DEBUG_SERIAL)
   display.clearDisplay();
@@ -218,8 +299,23 @@ void setup()
 /*************************************** Bucle principal *************************************/
 void loop()
 {
+  // Si el WiFi se fue se reinicia
+  if (WiFi.status() != WL_CONNECTED)
+  {
+#if (DEBUG_MODE != DEBUG_SERIAL)
+    display.println("Fallo,");
+    display.println("reiniciando");
+
+    display.display();
+
+    delay(5000);
+#endif
+
+    ESP.reset();
+  }
+
   // Sistema en reposo esperando al pase de una tarjeta
-  if (systemManager.systemState == SYSTEM_STATE_READY)
+  if (system_manager.system_state == SYSTEM_STATE_READY)
   {
     // Si se detecto una nueva tarjeta
     if (mfrc522.PICC_IsNewCardPresent())
@@ -241,13 +337,13 @@ void loop()
         mfrc522.PICC_HaltA();
 
         // Se pasa a estado de procesamiento
-        systemManager.systemState = SYSTEM_STATE_PROCESSING;
+        system_manager.system_state = SYSTEM_STATE_PROCESSING;
       }
     }
   }
 
   // Sistema procesando el pase de una tarjeta
-  else if (systemManager.systemState == SYSTEM_STATE_PROCESSING)
+  else if (system_manager.system_state == SYSTEM_STATE_PROCESSING)
   {
     // Respuesta recibida por el envio del paquete
     https_request_t httpsRequest;
@@ -267,6 +363,22 @@ void loop()
       {
         readDataPOST(httpsRequest.payload);
       }
+
+      else
+      {
+#if (DEBUG_MODE != DEBUG_SERIAL)
+        display.clearDisplay();
+        display.println("NUEVO INGRESO");
+        display.println("REGISTRO FAIL:");
+        display.println("Error " + String(httpsRequest.requestCode));
+
+        display.display();
+
+        delay(5000);
+#endif
+
+        ADD_LOG("Ingreso con error de respuesta, codigo: " + String(httpsRequest.requestCode));
+      }
     }
 
     else
@@ -281,17 +393,19 @@ void loop()
       display.println("conexion");
 
       display.display();
+
+      ADD_LOG("Error al conectar con el servidor.");
 #endif
     }
     DEBUG_PRINTLN("------------------------------------------------");
 
     delay(7000);
 
-    systemManager.systemState = SYSTEM_STATE_IDLE;
+    system_manager.system_state = SYSTEM_STATE_IDLE;
   }
 
   // Se imprime que el sistema estará en espera
-  else if (systemManager.systemState == SYSTEM_STATE_IDLE)
+  else if (system_manager.system_state == SYSTEM_STATE_IDLE)
   {
 #if (DEBUG_MODE != DEBUG_SERIAL)
     display.clearDisplay();
@@ -307,9 +421,11 @@ void loop()
         display.setCursor(display.width() / 2, 8);
       }
 
-      if (systemManager.usersEntry[i] != nullptr)
+      if ((system_manager.system_eeprom_data.users_entry[i].name != "") ||
+          (system_manager.system_eeprom_data.users_entry[i].state != "") ||
+          (system_manager.system_eeprom_data.users_entry[i].uid != ""))
       {
-        display.println(systemManager.usersEntry[i]->name);
+        display.println(system_manager.system_eeprom_data.users_entry[i].name);
 
         printLCDIndex++;
       }
@@ -318,7 +434,7 @@ void loop()
     display.display();
 #endif
 
-    systemManager.systemState = SYSTEM_STATE_READY;
+    system_manager.system_state = SYSTEM_STATE_READY;
   }
 }
 /*********************************************************************************************/
@@ -385,7 +501,10 @@ bool sendDataPOST(const char *host, const String &url, const int port, const Str
     httpsRequest->requestCode = client.getStatusCode();
     httpsRequest->payload = client.getResponseBody();
 
-    returnCode = true;
+    if (httpsRequest->requestCode > 0)
+    {
+      returnCode = true;
+    }
   }
 
   else
@@ -442,13 +561,19 @@ void readDataPOST(String &payload)
   // Si el usuario entra se lo añade
   if (state == "ENTRADA")
   {
-    addUserToUsersEntry(new system_user_t{name, uid, state});
+    system_user_t new_user;
+
+    new_user.name = name;
+    new_user.uid = uid;
+    new_user.state = state;
+
+    addUserToUsersEntry(new_user);
   }
 
   // Si el usuario sale se lo quita
   else if (state == "SALIDA")
   {
-    removeUserToUsersEntryUID(uid);
+    removeUserToUsersEntry(uid);
   }
 
 #if (DEBUG_MODE != DEBUG_SERIAL)
@@ -467,50 +592,120 @@ void readDataPOST(String &payload)
 /*
  * Funcion que añade usuarios a la lista de ingresados
  */
-void addUserToUsersEntry(system_user *user)
+void addUserToUsersEntry(system_user &user)
 {
-  // Bandera de lugar disponible
-  bool freeSpace = false;
+  // Se verifica si el usuario ya no esta ingresado
+  for (uint i = 0 ; i < MAX_USERS ; i++)
+  {
+    // Si el usuario ya esta dentro no se lo añade
+    if (system_manager.system_eeprom_data.users_entry[i].uid == user.uid)
+    {
+      return;
+    }
+  }
 
   // Donde se encuentre un espacio se asigna
   for (uint i = 0 ; i < MAX_USERS ; i++)
   {
-    if (systemManager.usersEntry[i] == nullptr)
+    if ((system_manager.system_eeprom_data.users_entry[i].name == "") ||
+        (system_manager.system_eeprom_data.users_entry[i].state == "") ||
+        (system_manager.system_eeprom_data.users_entry[i].uid == ""))
     {
-      systemManager.usersEntry[i] = user;
+      system_manager.system_eeprom_data.users_entry[i].name = user.name;
+      system_manager.system_eeprom_data.users_entry[i].state = user.state;
+      system_manager.system_eeprom_data.users_entry[i].uid = user.uid;
 
-      freeSpace = true;
+      eepromSave();
 
       break;
     }
-  }
-
-  // Si no hay lugar disponible se elimina la memoria creada
-  if (!freeSpace)
-  {
-    delete user;
   }
 }
 
 /*
  * Funcion que remueve usuarios de la lista de ingresados
  */
-void removeUserToUsersEntryUID(String &uid)
+void removeUserToUsersEntry(String &uid)
 {
   // Donde se encuentre el usuario se elimina
   for (uint i = 0 ; i < MAX_USERS ; i++)
   {
-    if (systemManager.usersEntry[i] != nullptr)
+    if ((system_manager.system_eeprom_data.users_entry[i].name != "") ||
+        (system_manager.system_eeprom_data.users_entry[i].state != "") ||
+        (system_manager.system_eeprom_data.users_entry[i].uid != ""))
     {
-      if (systemManager.usersEntry[i]->uid == uid)
+      if (system_manager.system_eeprom_data.users_entry[i].uid == uid)
       {
-        delete systemManager.usersEntry[i];
+        system_manager.system_eeprom_data.users_entry[i].uid = "";
+        system_manager.system_eeprom_data.users_entry[i].name = "";
+        system_manager.system_eeprom_data.users_entry[i].state = "";
 
-        systemManager.usersEntry[i] = nullptr;
+        eepromSave();
 
         break;
       }
     }
   }
+}
+
+#if (LOG_MODE == LOG_ON)
+/*
+ * Funcion que lista la pagina de log
+ */
+void logPage(AsyncWebServerRequest *request)
+{
+  request->send(200, "text/plain", "ESTADO DEL SISTEMA\r\n\r\n" + logData);
+}
+
+/*
+ * Funcion que añade lineas al log
+ */
+void logAdd(const String &log)
+{
+  // Si con el nuevo mensaje se excede del tamaño maximo se elimina una linea
+  if (logData.length() > LOG_MAX_SIZE)
+  {
+    logData.remove(0, logData.indexOf('\n') + 1);
+  }
+
+  logData += String(millis()) + ": " + log + "\r\n";
+}
+#endif
+
+/*
+ * Funcion que guarda los datos en la eeprom
+ */
+void eepromSave()
+{
+  // Escribimos la EEPROM
+  for (uint16_t i = 0 ; i < sizeof(system_eeprom_t) ; i++)
+  {
+    eeprom.write(i + EEPROM_BYTES_OFFSET, ((uint8_t *)(&system_manager.system_eeprom_data))[i]);
+    eeprom.commit();
+  }
+}
+
+/*
+ * Funcion que lee los datos en la eeprom
+ */
+void eepromRestore()
+{
+  for (uint16_t i = 0 ; i < sizeof(system_eeprom_t) ; i++)
+  {
+    ((uint8_t *)(&system_manager.system_eeprom_data))[i] = eeprom.read(i + EEPROM_BYTES_OFFSET);
+  }
+}
+
+/*
+ * Funcion que escribe datos vacios en la epprom
+ */
+void eepromReset()
+{
+  for (uint16_t i = 0 ; i < MAX_USERS ; i++)
+  {
+    system_manager.system_eeprom_data.users_entry[i] = {"", "", ""};
+  }
+
+  eepromSave();
 }
 /*********************************************************************************************/
