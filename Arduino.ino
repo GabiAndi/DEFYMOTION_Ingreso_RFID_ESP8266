@@ -103,7 +103,7 @@ const char *OTA_USERNAME = "DEFY";
 const char *OTA_PASSWORD = "DEFY0102";
 
 // Configuración de Google Scripts
-const String GOOGLE_SCRIPT_ID = "AKfycbxre4Zetg29e0i2PdZ-ID4j9tw6CczbxfNzoiA3Xke4rHvpLLNbDPRvF8gAbUTcs1GCpw";
+const String GOOGLE_SCRIPT_ID = "AKfycbxjFBzYRrkmfBKN0qrxdFEXy2pbh7e3c8A7l1Zhd0O20cZPfdW3Hfvdd9tI_6KwmZ6ZeA";
 const char *GOOGLE_SCRIPT_HOST = "script.google.com";
 const String GOOGLE_SCRIPT_URL = "/macros/s/" + GOOGLE_SCRIPT_ID + "/exec";
 const int GOOGLE_SCRIPT_PORT = 443;
@@ -594,11 +594,21 @@ void readDataPOST(String &payload)
  */
 void addUserToUsersEntry(system_user &user)
 {
+  // Se verifica si el usuario ya no esta ingresado
+  for (uint i = 0 ; i < MAX_USERS ; i++)
+  {
+    // Si el usuario ya esta dentro no se lo añade
+    if (system_manager.system_eeprom_data.users_entry[i].uid == user.uid)
+    {
+      return;
+    }
+  }
+
   // Donde se encuentre un espacio se asigna
   for (uint i = 0 ; i < MAX_USERS ; i++)
   {
-    if ((system_manager.system_eeprom_data.users_entry[i].name == "") &&
-        (system_manager.system_eeprom_data.users_entry[i].state == "") &&
+    if ((system_manager.system_eeprom_data.users_entry[i].name == "") ||
+        (system_manager.system_eeprom_data.users_entry[i].state == "") ||
         (system_manager.system_eeprom_data.users_entry[i].uid == ""))
     {
       system_manager.system_eeprom_data.users_entry[i].name = user.name;
@@ -620,8 +630,8 @@ void removeUserToUsersEntry(String &uid)
   // Donde se encuentre el usuario se elimina
   for (uint i = 0 ; i < MAX_USERS ; i++)
   {
-    if ((system_manager.system_eeprom_data.users_entry[i].name != "") &&
-        (system_manager.system_eeprom_data.users_entry[i].state != "") &&
+    if ((system_manager.system_eeprom_data.users_entry[i].name != "") ||
+        (system_manager.system_eeprom_data.users_entry[i].state != "") ||
         (system_manager.system_eeprom_data.users_entry[i].uid != ""))
     {
       if (system_manager.system_eeprom_data.users_entry[i].uid == uid)
