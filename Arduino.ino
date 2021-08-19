@@ -416,9 +416,9 @@ void loop()
 
     for (uint i = 0 ; i < 10 ; i++)
     {
-      if (printLCDIndex == 5)
+      if (printLCDIndex >= 5)
       {
-        display.setCursor(display.width() / 2, 8);
+        display.setCursor(display.width() / 2, 8 * (printLCDIndex - 4));
       }
 
       if ((system_manager.system_eeprom_data.users_entry[i].name != "") ||
@@ -630,8 +630,8 @@ void removeUserToUsersEntry(String &uid)
   // Donde se encuentre el usuario se elimina
   for (uint i = 0 ; i < MAX_USERS ; i++)
   {
-    if ((system_manager.system_eeprom_data.users_entry[i].name != "") ||
-        (system_manager.system_eeprom_data.users_entry[i].state != "") ||
+    if ((system_manager.system_eeprom_data.users_entry[i].name != "") &&
+        (system_manager.system_eeprom_data.users_entry[i].state != "") &&
         (system_manager.system_eeprom_data.users_entry[i].uid != ""))
     {
       if (system_manager.system_eeprom_data.users_entry[i].uid == uid)
